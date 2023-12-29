@@ -1,9 +1,11 @@
-use axum::extract::Path;
+use axum::extract::{Path, Query};
 use axum::{handler::HandlerWithoutStateExt, http::StatusCode, Router};
-use axum::{routing::get, routing::post, Json};
+use axum::{routing::get, Json};
 use serde::{Deserialize, Serialize};
 
 use tower_http::{services::ServeDir, trace::TraceLayer};
+use tracing::{event, Level};
+use url::Url;
 
 #[tokio::main]
 async fn main() {
@@ -34,8 +36,6 @@ async fn main() {
     // setup all routes
     let app = Router::new()
         .route("/k/share/:table", get(share_url))
-        // `POST /users` goes to `create_user`
-        .route("/users", post(create_user))
         // serve static html for everything not matched by a route
         .fallback_service(ServeDir::new("static").not_found_service(not_found.into_service()))
         .layer(TraceLayer::new_for_http());
@@ -45,47 +45,47 @@ async fn main() {
     axum::serve(listener, app).await.unwrap();
 }
 
-async fn share_url(Path(table): Path<String>) -> (StatusCode, Json<User>) {
-    // insert your application logic here
-    let user = User {
-        id: 1337,
-        username: table,
+// the input to our `create_user` handler
+#[derive(Serialize)]
+struct Status<'a> {
+    status: &'a str,
+}
+const ERROR_RETURN: Json<Status> = Json(Status { status: "error" });
+
+const SUCCESS_RETURN: Json<Status> = Json(Status { status: "success" });
+
+#[derive(Debug, Deserialize)]
+struct Params {
+    pub url: Option<String>,
+}
+
+async fn share_url(
+    Path(table): Path<String>,
+    params: Option<Query<Params>>,
+) -> (StatusCode, Json<Status<'static>>) {
+    // todo verify table
+    let _table = table.to_lowercase();
+
+    let Query(params) = match (params) {
+        Some(p) => p,
+        None => {
+            event!(Level::INFO, "share without url");
+            return (StatusCode::NO_CONTENT, ERROR_RETURN);
+        }
     };
 
-    // this will be converted into a JSON response
-    // with a status code of `201 Created`
-    (StatusCode::CREATED, Json(user))
+    let parsed_url = match Url::parse(params.url.unwrap().as_str()) {
+        Ok(url) => url,
+        Err(_) => {
+            todo!("url error handling not implemented")
+        }
+    };
+
+    event!(Level::INFO, "sharing url {}", parsed_url.to_string());
+
+    (StatusCode::OK, SUCCESS_RETURN)
 }
 
 async fn not_found() -> (StatusCode, &'static str) {
     (StatusCode::NOT_FOUND, "404 🤷‍♂️")
-}
-
-async fn create_user(
-    // this argument tells axum to parse the request body
-    // as JSON into a `CreateUser` type
-    Json(payload): Json<CreateUser>,
-) -> (StatusCode, Json<User>) {
-    // insert your application logic here
-    let user = User {
-        id: 1337,
-        username: payload.username,
-    };
-
-    // this will be converted into a JSON response
-    // with a status code of `201 Created`
-    (StatusCode::CREATED, Json(user))
-}
-
-// the input to our `create_user` handler
-#[derive(Deserialize)]
-struct CreateUser {
-    username: String,
-}
-
-// the output to our `create_user` handler
-#[derive(Serialize)]
-struct User {
-    id: u64,
-    username: String,
 }
